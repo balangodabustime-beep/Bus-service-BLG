@@ -1,0 +1,1197 @@
+﻿<!DOCTYPE html>
+<html lang="en"><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bus Time Finder</title>
+<link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#f6f7fb">
+  <link rel="apple-touch-icon" href="icon.png">
+  <!--
+    IMPORTANT:
+    - This single-file prototype implements the UI and main logic you requested.
+    - To make the map work offline, place map tile images in /map/tiles/{z}/{x}/{y}.png
+      and GPX files in /map/gpx/*.gpx. The code expects those folders relative to the HTML file.
+    - To enable GPX parsing & map: include leaflet.js and leaflet-gpx.js (bundled CDN links are used).
+      For a fully offline app you should download and bundle these files into your Android app's assets.
+    - Simulator expects GPX tracks (one per route) and will animate buses along them.
+    - Many of the "permanent storage" behaviors use localStorage.
+    - You can adapt styling to match "Hiking App v.2" by replacing CSS variables or classes.
+  -->
+
+  <!-- Leaflet CSS (you can ship offline copy) -->
+  <link rel="stylesheet" href="Bus%20Time%20Finder%20%E2%80%94%20Offline%20Map%20Demo.tml_files/leaflet.css">
+
+  <style>
+    :root{
+      --bg:#f6f7fb;
+      --card:#ffffff;
+      --accent:#2b7cff;
+      --muted:#6b7280;
+      --danger:#fb0000;
+      --ok:#33d01c;
+      --header-height:56px;
+      --footer-height:66px;
+      --radius:12px;
+      font-family: Inter, Roboto, "Segoe UI", system-ui, Arial;
+    }
+    [data-theme="dark"]{
+      --bg:#0b1220;
+      --card:#0f1724;
+      --accent:#4f9cff;
+      --muted:#9aa4b2;
+      --danger:#fb0000;
+      --ok:#33d01c;
+      color:#e6eef8;
+    }
+
+    html,body { height:100%; margin:0; background:var(--bg); -webkit-font-smoothing:antialiased;}
+    .app {
+      display:flex;
+      flex-direction:column;
+      height:100vh;
+      overflow:hidden;
+    }
+
+    header.app-header {
+      height:var(--header-height);
+      background:linear-gradient(90deg, rgba(255,255,255,0.6), rgba(255,255,255,0.3));
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:0 12px;
+      box-shadow:0 1px 6px rgba(0,0,0,0.06);
+      z-index:40;
+      transition:transform .25s ease;
+      backdrop-filter: blur(6px);
+	background: var(--bg);
+    }
+    [data-theme="dark"] header.app-header {
+	background: linear-gradient(90deg, rgba(6, 6, 6, 0.9), rgb(0, 0, 0));
+	box-shadow: none;
+}
+    header.app-header .title { font-weight:600; font-size:18px; }
+    header.app-header .subtitle { font-size:12px; color:var(--muted); }
+
+    main.app-main {
+      flex:1;
+      overflow:auto;
+      padding:12px;
+      -webkit-overflow-scrolling:touch;
+	background: var(--bg);
+    }
+
+    .card {
+      background:var(--card);
+      border-radius:var(--radius);
+      padding:12px;
+      box-shadow: 0 6px 18px rgba(8,12,20,0.04);
+      margin-bottom:12px;
+    }
+
+    /* Input card layout */
+    .input-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+   .input-row select, .input-row input[type="time"], .input-row input[type="text"], .input-row button {
+	padding: 8px 10px;
+	border-radius: 8px;
+	border: 1px solid rgba(0, 0, 0, 0);
+	background: transparent;
+	font-size: 14px;
+	color: var(--color);
+}
+    .input-row label { font-size:13px; color:var(--muted); margin-right:6px; }
+
+    .btn {
+      background:var(--accent);
+      color:white;
+      border:none;
+      padding:8px 12px;
+      border-radius:10px;
+      cursor:pointer;
+    }
+
+
+	option {
+	background: var(--card);
+	color: var(--color);
+}
+	
+    .btn.ghost { background:transparent; color:var(--accent); border:1px solid rgba(0,0,0,0.06); }
+
+    /* Result card layout */
+    .service-pill {
+      display:inline-block;
+      padding:6px 10px;
+      border-radius:999px;
+      font-weight:700;
+      color:white;
+      float:right;
+    }
+    .service-pill.sltb { background:var(--danger); }
+    .service-pill.private { background:var(--ok); }
+
+    .result-row { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }
+    .result-main { font-weight:700; font-size:18px; }
+    .meta { color:var(--muted); font-size:13px; }
+
+    /* Tabs for prev/next */
+    .tabs { display:flex; gap:8px; margin-top:10px; }
+    .tab { padding:6px 10px; border-radius:8px; cursor:pointer; background:rgba(0,0,0,0.03); }
+    .tab.active { background:var(--accent); color:white; }
+
+    /* Simulator small map area */
+    .simulator {
+      height:220px;
+      border-radius:10px;
+      overflow:hidden;
+    }
+
+    /* Map full area */
+    #map { width:100%; height:420px; border-radius:10px; }
+
+    /* Bottom navigation */
+    nav.bottom-nav {
+	height: var(--footer-height);
+	display: flex;
+	justify-content: space-around;
+	align-items: center;
+	background: var(--bg);
+	/* background: linear-gradient(180deg, rgb(28, 44, 60), rgb(0, 0, 0)); */
+	box-shadow: 0 -4px 18px rgba(8,12,20,0.04);
+	position: relative;
+	transition: transform .25s ease;
+	z-index: 40;
+}
+    nav.bottom-nav .nav-item { text-align:center; font-size:12px; color:var(--muted); cursor:pointer; }
+    nav.bottom-nav .nav-item.active { color:var(--accent); font-weight:700; }
+
+    /* Side floating menu (map-only) */
+    .side-menu {
+      position:fixed;
+      right:12px;
+      bottom:90px;
+      width:52px;
+      background:var(--card);
+      border-radius:12px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.12);
+      overflow:hidden;
+      transition:height .35s ease;
+      z-index:120;
+    }
+    .side-menu .toggle {
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      height:52px;
+      width:52px;
+      cursor:pointer;
+      border-bottom:1px solid rgba(0,0,0,0.04);
+    }
+    .side-menu .group { display:none; flex-direction:column; gap:8px; padding:8px; }
+    .side-menu.open .group { display:flex; }
+
+    .side-menu button { width:40px; height:36px; font-size:12px; border-radius:8px; border:none; background:var(--accent); color:white; cursor:pointer; }
+
+    /* Saved list */
+    .saved-list { display:flex; flex-direction:column; gap:8px; }
+    .saved-item { padding:8px; border-radius:8px; display:flex; align-items:center; justify-content:space-between; background:rgba(0,0,0,0.02); }
+
+    /* Settings */
+    .settings-row { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+
+    /* Fullscreen helpers */
+    .fullscreen-hidden { transform: translateY(-100%); }
+    .map-fullscreen { position:fixed; left:0; top:0; width:100%; height:100%; z-index:100; padding:var(--header-height) 12px var(--footer-height); }
+
+    /* small helper */
+    .muted { color:var(--muted); font-size:13px; }
+    .small { font-size:12px; color:var(--muted); }
+.calculate-btn{
+	padding: 6px 10px;
+	border-radius: 8px;
+	cursor: pointer;
+	background-color: var(--accent);
+	color: white;
+}
+  </style>
+</head>
+<body>
+  <div class="app" id="app" data-theme="dark">
+    <header class="app-header" id="header">
+      <div>
+        <div class="title" id="header-title">Buses</div>
+        <div class="subtitle" id="header-sub">Find the next bus</div>
+      </div>
+      <div id="header-right" class="small muted">Offline-ready</div>
+    </header>
+
+    <main class="app-main" id="main">
+      <!-- Buses Section -->
+      <section id="section-buses" class="section" style="">
+        <div class="card" id="input-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div style="font-weight:700;">Find bus times</div>
+            <div class="small muted">Waiting per stop: 30s · Speed default: 24 km/h</div>
+          </div>
+
+          <div class="input-row" style="margin-bottom:8px;">
+            <label for="route-select">Route</label>
+            <select id="route-select"><option value="BLG-Welioya" selected="selected">BLG-Welioya</option><option value="BLG-Welipatayaya-Kaltota">BLG-Welipatayaya-Kaltota</option><option value="BLG-Rajavaka-Mulgama">BLG-Rajavaka-Mulgama</option></select>
+
+            <label for="direction-select">Direction</label>
+            <select id="direction-select">
+              <option value="down" selected="selected">Down</option>
+              <option value="up">Up</option>
+            </select>
+
+            <label for="from-select">From</label>
+            <select id="from-select"><option value="Balangoda" selected="selected">Balangoda</option><option value="Kirimatitenna">Kirimatitenna</option><option value="depalamulla">depalamulla</option><option value="bowatta">bowatta</option><option value="rajavaka">rajavaka</option><option value="nawaneliya">nawaneliya</option><option value="molamure">molamure</option><option value="tanjantenna">tanjantenna</option><option value="16thPost">16thPost</option><option value="kaltota">kaltota</option><option value="udaKolaniya">udaKolaniya</option><option value="Welioya">Welioya</option></select>
+
+            <label for="to-select">To</label>
+            <select id="to-select"><option value="Balangoda">Balangoda</option><option value="Kirimatitenna">Kirimatitenna</option><option value="depalamulla">depalamulla</option><option value="bowatta">bowatta</option><option value="rajavaka">rajavaka</option><option value="nawaneliya">nawaneliya</option><option value="molamure">molamure</option><option value="tanjantenna">tanjantenna</option><option value="16thPost">16thPost</option><option value="kaltota">kaltota</option><option value="udaKolaniya">udaKolaniya</option><option value="Welioya" selected="selected">Welioya</option></select>
+          </div>
+
+          <div class="input-row" style="margin-top:8px;">
+            <label for="time-input">Time</label>
+            <input type="time" id="time-input" value="15:05">
+            <button class="btn ghost" id="now-btn">Now</button>
+            <button class="btn" id="set-time-btn" style="padding: 6px 10px;
+	border-radius: 8px;
+	cursor: pointer;
+	background-color: var(--accent);
+	color: white; ">Set &amp; Calculate</button>
+
+            <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+              <label class="small muted">Speed (km/h)</label>
+              <input id="speed-input" type="number" min="5" max="120" value="24" style="width:80px;">
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="result-card">
+          <div style="position:relative;">
+            <div class="service-pill" id="service-pill">—</div>
+            <div class="result-row" style="margin-right:80px;">
+              <div>
+                <div class="result-main" id="result-route">—</div>
+                <div class="meta" id="result-desc">—</div>
+              </div>
+              <div style="text-align:right;">
+                <div class="small muted">From</div>
+                <div id="arrival-from" class="result-main">--:--</div>
+                <div class="small muted">To</div>
+                <div id="arrival-to" class="result-main">--:--</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tabs" style="margin-top:8px;">
+            <div class="tab" id="prev-tab">Previous</div>
+            <div class="tab active" id="next-tab">Next</div>
+          </div>
+
+          <div style="display:flex; gap:12px; margin-top:10px; flex-wrap:wrap;">
+            <div style="min-width:160px;">
+              <div class="small muted">Departure</div>
+              <div id="detail-dep">—</div>
+            </div>
+            <div style="min-width:160px;">
+              <div class="small muted">Destination</div>
+              <div id="detail-dest">—</div>
+            </div>
+            <div style="min-width:120px;">
+              <div class="small muted">Route</div>
+              <div id="detail-route">—</div>
+            </div>
+            <div style="min-width:120px;">
+              <div class="small muted">Distance</div>
+              <div id="detail-distance">—</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div style="font-weight:700;">Simulator</div>
+            <div class="small muted">Shows running buses on stored GPX tracks</div>
+          </div>
+          <div class="simulator" id="simulator">
+            <div id="sim-map" style="width:100%;height:100%;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Map Section -->
+      <section id="section-map" class="section" style="display: none;">
+        <div class="card" style="margin-bottom:6px;">
+          <div style="display:flex; gap:8px;">
+            <select id="map-from" style="flex:1"><option value="Balangoda" selected="selected">Balangoda</option><option value="Kirimatitenna">Kirimatitenna</option><option value="depalamulla">depalamulla</option><option value="bowatta">bowatta</option><option value="rajavaka">rajavaka</option><option value="nawaneliya">nawaneliya</option><option value="molamure">molamure</option><option value="tanjantenna">tanjantenna</option><option value="16thPost">16thPost</option><option value="kaltota">kaltota</option><option value="udaKolaniya">udaKolaniya</option><option value="Welioya">Welioya</option></select>
+            <select id="map-to" style="flex:1"><option value="Balangoda">Balangoda</option><option value="Kirimatitenna">Kirimatitenna</option><option value="depalamulla">depalamulla</option><option value="bowatta">bowatta</option><option value="rajavaka">rajavaka</option><option value="nawaneliya">nawaneliya</option><option value="molamure">molamure</option><option value="tanjantenna">tanjantenna</option><option value="16thPost">16thPost</option><option value="kaltota">kaltota</option><option value="udaKolaniya">udaKolaniya</option><option value="Welioya" selected="selected">Welioya</option></select>
+            <button id="map-set-btn" class="btn">Use</button>
+          </div>
+          <div class="small muted" style="margin-top:6px;">Tap a GPX route on the map or choose stops. Double-tap on map area to toggle fullscreen.</div>
+        </div>
+
+        <div id="map" class="card"></div>
+      </section>
+
+      <!-- Saved Section -->
+      <section id="section-saved" class="section" style="display: none;">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-weight:700;">Saved Locations</div>
+            <div>
+              <button id="import-btn" class="btn ghost">Import</button>
+              <button id="export-btn" class="btn ghost">Export</button>
+            </div>
+          </div>
+
+          <div style="margin-top:8px;">
+            <div class="small muted">Locations</div>
+            <div id="saved-locations" class="saved-list" style="margin-top:8px;"></div>
+
+            <div class="small muted" style="margin-top:12px;">Tracks</div>
+            <div id="saved-tracks" class="saved-list" style="margin-top:8px;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings Section -->
+      <section id="section-settings" class="section" style="display: none;">
+        <div class="card">
+          <div style="font-weight:700; margin-bottom:8px;">Theme &amp; Language</div>
+          <div class="settings-row">
+            <div>
+              <div class="small muted">Theme</div>
+              <div style="margin-top:6px;">
+                <button id="theme-toggle" class="btn ghost">Toggle Light/Dark</button>
+              </div>
+            </div>
+            <div>
+              <div class="small muted">Language</div>
+              <div style="margin-top:6px;">
+                <select id="language-select">
+                  <option value="en" selected="selected">English</option>
+                  <option value="si">සිංහල (Sinhala)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;">
+            <div class="small muted">Map Layers</div>
+            <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+              <label><input type="checkbox" class="layer-toggle" data-layer="osm" checked="checked"> OSM</label>
+              <label><input type="checkbox" class="layer-toggle" data-layer="sat"> Satellite</label>
+              <label><input type="checkbox" class="layer-toggle" data-layer="topo"> Topo</label>
+              <label><input type="checkbox" class="layer-toggle" data-layer="hill"> Hillshade</label>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;">
+            <div class="small muted">GPS &amp; Notifications</div>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+              <button id="gps-toggle" class="btn ghost">Toggle GPS</button>
+              <div style="margin-left:auto;">
+                <label class="small muted">Notifications</label>
+                <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
+                  <input type="checkbox" id="notify-toggle">
+                  <label for="notify-toggle" class="small muted">Enable</label>
+                  <input type="time" id="notify-time" style="margin-left:8px;">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;">
+            <div class="small muted">Other suggestions</div>
+            <ul>
+              <li class="small muted">Add offline tile-pack download manager (for Android packaging).</li>
+              <li class="small muted">Allow multi-stop journeys and estimated fares.</li>
+              <li class="small muted">Support geofenced reminders and background notifications.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" id="bottom-nav">
+      <div class="nav-item active" data-section="buses">Buses</div>
+      <div class="nav-item" data-section="map">Map</div>
+      <div class="nav-item" data-section="saved">Saved</div>
+      <div class="nav-item" data-section="settings">Settings</div>
+    </nav>
+
+    <!-- Side floating map menu -->
+    <div class="side-menu" id="side-menu" style="display: none;">
+      <div class="toggle" id="side-toggle">☰</div>
+      <div class="group">
+        <button title="Layers" id="btn-layers">L</button>
+        <button title="Mark" id="btn-mark">M</button>
+        <button title="Save" id="btn-save">S</button>
+        <button title="GPS" id="btn-gps">G</button>
+        <button title="Record GPX" id="btn-record">R</button>
+      </div>
+    </div>
+
+    <!-- Libraries (for offline app ship these locally instead of using CDN) -->
+    <script src="Bus%20Time%20Finder%20%E2%80%94%20Offline%20Map%20Demo.tml_files/leaflet.js"></script>
+    <script src="Bus%20Time%20Finder%20%E2%80%94%20Offline%20Map%20Demo.tml_files/togeojson.min.js"></script>
+    <!-- Simple GPX loader (very small) -->
+    <script>
+      // Minimal GPX loader: parses GPX string into GeoJSON using toGeoJSON (togeojson)
+      function parseGPXString(gpxText) {
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(gpxText, "application/xml");
+        try { return toGeoJSON.gpx(xml); } catch(e) { console.error("GPX parse error",e); return null; }
+      }
+    </script>
+
+    <script>
+      // ---------------------------
+      // Data normalization
+      // ---------------------------
+      // Reconstructed, corrected JS object from your provided data.
+      // For each route we store stops (ordered) with distances (km from route start)
+      // and a timetable object { up: [buses], down: [buses] } where each bus has departureTime (HH:MM), departureName, destinationName, endTime, service, distance (route total), routeNumber
+      const busTimeTables = {
+        "BLG-Welioya": {
+          stops: [
+            { id:"Balangoda", name:"Balangoda", dist:0 },
+            { id:"Kirimatitenna", name:"Kirimatitenna", dist:3.5 },
+            { id:"depalamulla", name:"depalamulla", dist:8.1 },
+            { id:"bowatta", name:"bowatta", dist:10 },
+            { id:"rajavaka", name:"rajavaka", dist:13.5 },
+            { id:"nawaneliya", name:"nawaneliya", dist:17 },
+            { id:"molamure", name:"molamure", dist:18.5 },
+            { id:"tanjantenna", name:"tanjantenna", dist:22.5 },
+            { id:"16thPost", name:"16thPost", dist:25 },
+            { id:"kaltota", name:"kaltota", dist:29 },
+            { id:"udaKolaniya", name:"udaKolaniya", dist:31 },
+            { id:"Welioya", name:"Welioya", dist:34 }
+          ],
+          timetable: {
+            down: [
+              { departureName:"Balangoda", departureTime:"06:00", destination:"Wēlioya", endTime:"07:30", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"07:30", destination:"Wēlioya", endTime:"09:00", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"08:30", destination:"Wēlioya", endTime:"10:00", service:"PRIVATE", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"09:00", destination:"Wēlioya", endTime:"10:30", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"09:30", destination:"Wēlioya", endTime:"11:00", service:"PRIVATE", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"10:20", destination:"Wēlioya", endTime:"11:50", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"11:40", destination:"Wēlioya", endTime:"13:10", service:"PRIVATE", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"12:30", destination:"Wēlioya", endTime:"14:00", service:"PRIVATE", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"13:30", destination:"Wēlioya", endTime:"15:00", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Balangoda", departureTime:"15:00", destination:"Hambegamuwa", endTime:"09:00", service:"SLTB", distance:34, routeNumber:8 }
+            ],
+            up: [
+              { departureName:"Wēlioya", departureTime:"06:00", destination:"Balangoda", endTime:"07:30", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Wēlioya", departureTime:"07:30", destination:"Balangoda", endTime:"09:00", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Wēlioya", departureTime:"08:30", destination:"Balangoda", endTime:"10:00", service:"PRIVATE", distance:34, routeNumber:8 },
+              { departureName:"Wēlioya", departureTime:"09:00", destination:"Balangoda", endTime:"10:30", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Wēlioya", departureTime:"09:30", destination:"Balangoda", endTime:"11:00", service:"PRIVATE", distance:34, routeNumber:8 },
+              { departureName:"Wēlioya", departureTime:"10:20", destination:"Balangoda", endTime:"11:50", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Wēlioya", departureTime:"11:40", destination:"Balangoda", endTime:"13:10", service:"PRIVATE", distance:34, routeNumber:8 },
+              { departureName:"Wēlioya", departureTime:"12:30", destination:"Balangoda", endTime:"14:00", service:"PRIVATE", distance:34, routeNumber:8 },
+              { departureName:"Wēlioya", departureTime:"13:30", destination:"Balangoda", endTime:"15:00", service:"SLTB", distance:34, routeNumber:8 },
+              { departureName:"Hambegamuwa", departureTime:"15:00", destination:"Balangoda", endTime:"09:00", service:"SLTB", distance:34, routeNumber:8 }
+            ]
+          }
+        },
+
+        "BLG-Welipatayaya-Kaltota": {
+          stops: [
+            { id:"Balangoda", name:"Balangoda", dist:0 },
+            { id:"Kirimatitenna", name:"Kirimatitenna", dist:3.5 },
+            { id:"depalamulla", name:"depalamulla", dist:8.1 },
+            { id:"bowatta", name:"bowatta", dist:10 },
+            { id:"rajavaka", name:"rajavaka", dist:13.5 },
+            { id:"kassapalena", name:"kassapalena", dist:19 },
+            { id:"diyavinna", name:"diyavinna", dist:21 },
+            { id:"budugala", name:"budugala", dist:24 },
+            { id:"welipatayāya", name:"welipatayāya", dist:26 },
+            { id:"Pabbata", name:"Pabbata", dist:28 },
+            { id:"kaltota", name:"kaltota", dist:31 }
+          ],
+          timetable: {
+            up: [
+              { departureName:"Balangoda", departureTime:"06:00", destination:"kaltota", endTime:"07:30", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"07:30", destination:"kaltota", endTime:"09:00", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"08:30", destination:"kaltota", endTime:"10:00", service:"PRIVATE", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"09:00", destination:"kaltota", endTime:"10:30", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"09:30", destination:"kaltota", endTime:"11:00", service:"PRIVATE", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"10:20", destination:"kaltota", endTime:"11:50", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"11:40", destination:"kaltota", endTime:"13:10", service:"PRIVATE", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"12:30", destination:"kaltota", endTime:"14:00", service:"PRIVATE", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"13:30", destination:"kaltota", endTime:"15:00", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"Balangoda", departureTime:"15:00", destination:"kaltota", endTime:"09:00", service:"SLTB", distance:39, routeNumber:10 }
+            ],
+            down: [
+              { departureName:"kaltota", departureTime:"06:00", destination:"Balangoda", endTime:"07:30", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"07:30", destination:"Balangoda", endTime:"09:00", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"08:30", destination:"Balangoda", endTime:"10:00", service:"PRIVATE", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"09:00", destination:"Balangoda", endTime:"10:30", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"09:30", destination:"Balangoda", endTime:"11:00", service:"PRIVATE", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"10:20", destination:"Balangoda", endTime:"11:50", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"11:40", destination:"Balangoda", endTime:"13:10", service:"PRIVATE", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"12:30", destination:"Balangoda", endTime:"14:00", service:"PRIVATE", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"13:30", destination:"Balangoda", endTime:"15:00", service:"SLTB", distance:39, routeNumber:10 },
+              { departureName:"kaltota", departureTime:"15:00", destination:"Balangoda", endTime:"09:00", service:"SLTB", distance:39, routeNumber:10 }
+            ]
+          }
+        },
+
+        "BLG-Rajavaka-Mulgama": {
+          stops: [
+            { id:"Balangoda", name:"Balangoda", dist:0 },
+            { id:"Kirimatitenna", name:"Kirimatitenna", dist:3.5 },
+            { id:"depalamulla", name:"depalamulla", dist:8.1 },
+            { id:"bowatta", name:"bowatta", dist:10 },
+            { id:"rajavaka1j", name:"rajavaka1j", dist:12.7 },
+            { id:"Mulgama", name:"Mulgama", dist:29 }
+          ],
+          timetable: {
+            down: [
+              { departureName:"Balangoda", departureTime:"06:00", destination:"Mulgama", endTime:"07:30", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"07:30", destination:"Mulgama", endTime:"09:00", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"08:30", destination:"Mulgama", endTime:"10:00", service:"PRIVATE", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"09:00", destination:"Mulgama", endTime:"10:30", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"09:30", destination:"Mulgama", endTime:"11:00", service:"PRIVATE", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"10:20", destination:"Mulgama", endTime:"11:50", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"11:40", destination:"Mulgama", endTime:"13:10", service:"PRIVATE", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"12:30", destination:"Mulgama", endTime:"14:00", service:"PRIVATE", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"13:30", destination:"Mulgama", endTime:"15:00", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Balangoda", departureTime:"15:00", destination:"Mulgama", endTime:"09:00", service:"SLTB", distance:29, routeNumber:12 }
+            ],
+            up: [
+              { departureName:"Mulgama", departureTime:"06:00", destination:"Balangoda", endTime:"07:30", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"07:30", destination:"Balangoda", endTime:"09:00", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"08:30", destination:"Balangoda", endTime:"10:00", service:"PRIVATE", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"09:00", destination:"Balangoda", endTime:"10:30", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"09:30", destination:"Balangoda", endTime:"11:00", service:"PRIVATE", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"10:20", destination:"Balangoda", endTime:"11:50", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"11:40", destination:"Balangoda", endTime:"13:10", service:"PRIVATE", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"12:30", destination:"Balangoda", endTime:"14:00", service:"PRIVATE", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"13:30", destination:"Balangoda", endTime:"15:00", service:"SLTB", distance:29, routeNumber:12 },
+              { departureName:"Mulgama", departureTime:"15:00", destination:"Balangoda", endTime:"17:30", service:"SLTB", distance:29, routeNumber:12 }
+            ]
+          }
+        }
+      };
+
+      // default stops/gpx mapping (your GPX files should be named by route id)
+      const GPX_FOLDER = "map/gpx/"; // place .gpx files here: e.g. map/gpx/BLG-Welioya.gpx
+
+      // default vars
+      const WAIT_PER_STOP_SECONDS = 30;
+      let selectedRouteId = Object.keys(busTimeTables)[0];
+      let selectedDirection = "down";
+      let selectedFrom = null, selectedTo = null;
+      let selectedTimeStr = null;
+      let currentTheme = "light";
+
+      // helpers: time conversions
+      function parseTimeHHMM(t) {
+        if (!t) return null;
+        // Support H:MM or HH:MM
+        const parts = t.trim().split(":");
+        if (parts.length < 2) return null;
+        const hh = parseInt(parts[0],10);
+        const mm = parseInt(parts[1],10);
+        return hh*60 + mm;
+      }
+      function formatMinutesToHHMM(m) {
+        m = Math.round(m);
+        m = ((m % (24*60)) + (24*60)) % (24*60);
+        const hh = Math.floor(m/60).toString().padStart(2,"0");
+        const mm = (m%60).toString().padStart(2,"0");
+        return `${hh}:${mm}`;
+      }
+
+      function getStopById(route, id) {
+        return route.stops.find(s => s.id.toLowerCase() === id.toLowerCase() || s.name.toLowerCase() === id.toLowerCase());
+      }
+
+      function distanceBetweenStops(route, fromId, toId) {
+        const from = getStopById(route, fromId);
+        const to = getStopById(route, toId);
+        if (!from || !to) return null;
+        return Math.abs(to.dist - from.dist);
+      }
+
+      // compute travel time in minutes between two stops using speed (km/h) plus waiting per intermediate stop
+      function travelTimeMinutes(route, fromId, toId, speedKmh=24) {
+        const dist = distanceBetweenStops(route, fromId, toId);
+        if (dist === null) return null;
+        const hours = dist / speedKmh;
+        const seconds = hours * 3600;
+        // compute number of intermediate stops (count stops strictly between indices)
+        const stops = route.stops;
+        const idxFrom = stops.findIndex(s => s.id.toLowerCase() === fromId.toLowerCase() || s.name.toLowerCase() === fromId.toLowerCase());
+        const idxTo = stops.findIndex(s => s.id.toLowerCase() === toId.toLowerCase() || s.name.toLowerCase() === toId.toLowerCase());
+        let intermediate = Math.max(0, Math.abs(idxTo - idxFrom) - 1);
+        const waitSec = intermediate * WAIT_PER_STOP_SECONDS;
+        const totalSec = seconds + waitSec;
+        return totalSec / 60;
+      }
+
+      // Given a bus departure (time when bus leaves its departure stop), compute when it reaches an arbitrary stop on its route
+      // If bus departure stop isn't present in route.stops we approximate by distance proportion.
+      function busArrivalAtStopMinutes(route, busObj, stopId, speedKmh) {
+        // busObj.departureTime is HH:MM at busObj.departureName
+        const depMinutes = parseTimeHHMM(busObj.departureTime);
+        // compute distance from bus departure stop to target stop using stops distances where possible
+        const fromStop = route.stops.find(s => s.name.toLowerCase() === busObj.departureName.toLowerCase() || s.id.toLowerCase() === busObj.departureName.toLowerCase());
+        const toStop = route.stops.find(s => s.id.toLowerCase() === stopId.toLowerCase() || s.name.toLowerCase() === stopId.toLowerCase());
+        if (!toStop) return null;
+        let startDist = 0;
+        if (fromStop) startDist = fromStop.dist;
+        else {
+          // if departure is not found, assume start at 0
+          startDist = 0;
+        }
+        const legDist = Math.abs(toStop.dist - startDist);
+        const travelMin = (legDist / speedKmh) * 60;
+        // compute stops between start and target for waiting time
+        let intermediate = 0;
+        if (fromStop) {
+          const idxFrom = route.stops.indexOf(fromStop);
+          const idxTo = route.stops.indexOf(toStop);
+          intermediate = Math.max(0, Math.abs(idxTo - idxFrom) - 1);
+        }
+        const waitMin = (intermediate * WAIT_PER_STOP_SECONDS) / 60;
+        return depMinutes + travelMin + waitMin;
+      }
+
+      // find next and previous bus arrival times for selected route/direction/from/to/time
+      function findPrevNext(routeId, direction, fromId, toId, timeMinutes, speedKmh=26) {
+        const route = busTimeTables[routeId];
+        if (!route) return {prev:null,next:null,all:[]};
+        const list = route.timetable[direction] || [];
+        const arrivals = list.map((bus, idx) => {
+          const atFrom = busArrivalAtStopMinutes(route, bus, fromId, speedKmh);
+          const atTo = busArrivalAtStopMinutes(route, bus, toId, speedKmh);
+          return { bus, idx, atFrom, atTo };
+        }).filter(a => a.atFrom !== null && a.atTo !== null);
+        arrivals.sort((a,b) => a.atFrom - b.atFrom);
+        const next = arrivals.find(a => a.atFrom >= timeMinutes) || null;
+        const prev = [...arrivals].reverse().find(a => a.atFrom < timeMinutes) || null;
+        return { prev, next, all:arrivals };
+      }
+
+      // ---------------------------
+      // UI binding & initialisation
+      // ---------------------------
+      const routeSelect = document.getElementById("route-select");
+      const directionSelect = document.getElementById("direction-select");
+      const fromSelect = document.getElementById("from-select");
+      const toSelect = document.getElementById("to-select");
+      const timeInput = document.getElementById("time-input");
+      const nowBtn = document.getElementById("now-btn");
+      const setTimeBtn = document.getElementById("set-time-btn");
+      const speedInput = document.getElementById("speed-input");
+
+      const headerTitle = document.getElementById("header-title");
+      const headerSub = document.getElementById("header-sub");
+      const servicePill = document.getElementById("service-pill");
+      const resultRoute = document.getElementById("result-route");
+      const resultDesc = document.getElementById("result-desc");
+      const arrivalFromEl = document.getElementById("arrival-from");
+      const arrivalToEl = document.getElementById("arrival-to");
+      const prevTab = document.getElementById("prev-tab");
+      const nextTab = document.getElementById("next-tab");
+      const detailDep = document.getElementById("detail-dep");
+      const detailDest = document.getElementById("detail-dest");
+      const detailRoute = document.getElementById("detail-route");
+      const detailDistance = document.getElementById("detail-distance");
+
+      function populateRoutes() {
+        routeSelect.innerHTML = "";
+        const keys = Object.keys(busTimeTables);
+        keys.forEach(k => {
+          const opt = document.createElement("option");
+          opt.value = k;
+          opt.textContent = k;
+          routeSelect.appendChild(opt);
+        });
+        selectedRouteId = keys[0];
+      }
+
+      function populateStopsForRoute(routeId) {
+        const route = busTimeTables[routeId];
+        fromSelect.innerHTML = "";
+        toSelect.innerHTML = "";
+        const mapFrom = document.getElementById("map-from");
+        const mapTo = document.getElementById("map-to");
+        mapFrom.innerHTML = ""; mapTo.innerHTML = "";
+        route.stops.forEach(s => {
+          const o1 = document.createElement("option"); o1.value = s.id; o1.textContent = s.name;
+          const o2 = o1.cloneNode(true);
+          fromSelect.appendChild(o1);
+          toSelect.appendChild(o2);
+
+          const m1 = document.createElement("option"); m1.value = s.id; m1.textContent = s.name;
+          const m2 = m1.cloneNode(true);
+          mapFrom.appendChild(m1); mapTo.appendChild(m2);
+        });
+        // defaults
+        fromSelect.selectedIndex = 0;
+        toSelect.selectedIndex = Math.max(1, route.stops.length - 1);
+        mapFrom.selectedIndex = 0;
+        mapTo.selectedIndex = Math.max(1, route.stops.length - 1);
+        selectedFrom = fromSelect.value;
+        selectedTo = toSelect.value;
+      }
+
+      routeSelect.addEventListener("change", e => {
+        selectedRouteId = e.target.value;
+        populateStopsForRoute(selectedRouteId);
+        calculateAndDisplay();
+      });
+      directionSelect.addEventListener("change", e => {
+        selectedDirection = e.target.value;
+        calculateAndDisplay();
+      });
+      fromSelect.addEventListener("change", e => { selectedFrom = e.target.value; calculateAndDisplay(); });
+      toSelect.addEventListener("change", e => { selectedTo = e.target.value; calculateAndDisplay(); });
+
+      nowBtn.addEventListener("click", () => {
+        const now = new Date();
+        timeInput.value = now.toTimeString().slice(0,5);
+      });
+
+      setTimeBtn.addEventListener("click", () => {
+        selectedTimeStr = timeInput.value;
+        calculateAndDisplay();
+      });
+
+      prevTab.addEventListener("click", () => { prevTab.classList.add("active"); nextTab.classList.remove("active"); calculateAndDisplay(true); });
+      nextTab.addEventListener("click", () => { nextTab.classList.add("active"); prevTab.classList.remove("active"); calculateAndDisplay(false); });
+
+      function setServicePill(service) {
+        servicePill.textContent = (service || "—").toUpperCase();
+        servicePill.classList.toggle("sltb", service && service.toUpperCase() === "SLTB");
+        servicePill.classList.toggle("private", service && service.toUpperCase() === "PRIVATE");
+      }
+
+      function calculateAndDisplay(forcePrevious=false) {
+        const route = busTimeTables[selectedRouteId];
+        if (!route || !selectedFrom || !selectedTo) return;
+        const timeStr = selectedTimeStr || timeInput.value || (new Date()).toTimeString().slice(0,5);
+        const timeMinutes = parseTimeHHMM(timeStr);
+        const speed = Number(speedInput.value) || 26;
+
+        const result = findPrevNext(selectedRouteId, selectedDirection, selectedFrom, selectedTo, timeMinutes, speed);
+        const chosen = (prevTab.classList.contains("active")) ? result.prev : result.next;
+        // if nothing found in chosen, fallback to next/prev respectively
+        const fallback = (prevTab.classList.contains("active")) ? result.next : result.prev;
+        const final = chosen || fallback;
+
+        if (!final) {
+          resultRoute.textContent = "No buses found";
+          setServicePill(null);
+          arrivalFromEl.textContent = "--:--";
+          arrivalToEl.textContent = "--:--";
+          detailDep.textContent = "—";
+          detailDest.textContent = "—";
+          detailRoute.textContent = "—";
+          detailDistance.textContent = "—";
+          resultDesc.textContent = "";
+          return;
+        }
+
+        const bus = final.bus;
+        resultRoute.textContent = `${bus.departureName} → ${bus.destination} (#${bus.routeNumber})`;
+        resultDesc.textContent = `${selectedDirection.toUpperCase()} • route ${selectedRouteId}`;
+        setServicePill(bus.service);
+
+        const atFrom = final.atFrom;
+        const atTo = final.atTo;
+        arrivalFromEl.textContent = formatMinutesToHHMM(atFrom);
+        arrivalToEl.textContent = formatMinutesToHHMM(atTo);
+
+        detailDep.textContent = `${bus.departureName} • ${bus.departureTime}`;
+        detailDest.textContent = `${bus.destination} • ${bus.endTime}`;
+        detailRoute.textContent = `${bus.routeNumber} - ${selectedRouteId}`;
+        detailDistance.textContent = `${bus.distance} km`;
+
+        // optionally set a notification in localStorage for 15 minutes before arrival if notifications enabled
+        const notifyEnabled = document.getElementById("notify-toggle") && document.getElementById("notify-toggle").checked;
+        if (notifyEnabled) {
+          const remindAt = atFrom - 15;
+          scheduleLocalNotification(remindAt, resultRoute.textContent);
+        }
+      }
+
+      // schedule simple "notification" with setTimeout for demo (works while page open)
+      function scheduleLocalNotification(minutesFromMidnight, title) {
+        // compute ms until that moment today (or tomorrow if in past)
+        const now = new Date();
+        const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        const target = new Date(todayMid.getTime() + minutesFromMidnight * 60000);
+        if (target < now) target.setDate(target.getDate() + 1);
+        const ms = target - now;
+        setTimeout(() => {
+          if (Notification && Notification.permission === "granted") {
+            new Notification("Bus reminder", { body: `Bus: ${title} arriving soon`});
+          } else {
+            alert("Reminder: " + title);
+          }
+        }, ms);
+      }
+
+      // ---------------------------
+      // Bottom navigation logic
+      // ---------------------------
+      const navItems = document.querySelectorAll(".nav-item");
+      const sections = {
+        buses: document.getElementById("section-buses"),
+        map: document.getElementById("section-map"),
+        saved: document.getElementById("section-saved"),
+        settings: document.getElementById("section-settings")
+      };
+      navItems.forEach(it => {
+        it.addEventListener("click", () => {
+          navItems.forEach(n => n.classList.remove("active"));
+          it.classList.add("active");
+          const key = it.dataset.section;
+          Object.keys(sections).forEach(k => sections[k].style.display = (k === key) ? "" : "none");
+          headerTitle.textContent = it.textContent;
+          headerSub.textContent = {
+            buses: "Find the next bus",
+            map: "Map & routes",
+            saved: "Saved places & tracks",
+            settings: "App settings"
+          }[key] || "";
+          // show side menu only on map
+          document.getElementById("side-menu").style.display = (key === "map") ? "block" : "none";
+          // when switching to map, invalidate size
+          if (key === "map" && mapInstance) setTimeout(()=>mapInstance.invalidateSize(),250);
+        });
+      });
+
+      // ---------------------------
+      // Map & GPX loading
+      // ---------------------------
+      let mapInstance = null;
+      let mapLayers = {};
+      let gpxLayers = {};
+      function initMap() {
+        mapInstance = L.map('map', { center:[6.666,80.75], zoom:9, preferCanvas:true });
+        // base: OSM - try to load local tiles, fallback to OSM tile server
+        const localTiles = L.tileLayer('map/tiles/{z}/{x}/{y}.png', { minZoom:0, maxZoom:18, attribution:'' });
+        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OSM' });
+        const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', { maxZoom:19, subdomains:['mt0','mt1','mt2','mt3'] });
+
+        localTiles.addTo(mapInstance);
+        mapLayers.osm = localTiles;
+        mapLayers.remoteOSM = osm;
+        mapLayers.sat = sat;
+
+        // a simple highlight style for GPX lines
+        function styleGPX() { return { color:'#2b7cff', weight:4, opacity:0.9 }; }
+
+        // Load all GPX files present in map/gpx/ by attempting to fetch an index file 'map/gpx/index.json'
+        fetch('map/gpx/index.json').then(r=>{
+          if (!r.ok) throw new Error("no index");
+          return r.json();
+        }).then(list=>{
+          list.forEach(name=>{
+            fetch(GPX_FOLDER + name).then(r=>r.text()).then(txt=>{
+              const geo = parseGPXString(txt);
+              if (!geo) return;
+              const g = L.geoJSON(geo, { style: styleGPX, onEachFeature: (f, layer) => {
+                layer.on('click', () => {
+                  // when GPX track clicked, set routeId if name matches
+                  const rid = name.replace('.gpx','');
+                  if (busTimeTables[rid]) {
+                    routeSelect.value = rid; routeSelect.dispatchEvent(new Event('change'));
+                    alert('Route set to ' + rid);
+                  }
+                });
+              }});
+              g.addTo(mapInstance);
+              gpxLayers[name] = g;
+              // Try to show start marker
+              if (geo.features && geo.features.length && geo.features[0].geometry && geo.features[0].geometry.type === "LineString") {
+                const coords = geo.features[0].geometry.coordinates[0];
+                L.marker([coords[1], coords[0]]).addTo(mapInstance).bindTooltip(name);
+              }
+            }).catch(e=>{
+              console.warn("Could not load gpx", name, e);
+            });
+          });
+        }).catch(e=>{
+          // index.json missing - try a small set of expected GPX names
+          const expected = Object.keys(busTimeTables).map(k => k + ".gpx");
+          expected.forEach(name => {
+            fetch(GPX_FOLDER + name).then(r => {
+              if (!r.ok) throw new Error("no gpx");
+              return r.text();
+            }).then(txt=>{
+              const geo = parseGPXString(txt);
+              if (!geo) return;
+              const g = L.geoJSON(geo, { style() { return { color:'#2b7cff', weight:4 }; }});
+              g.addTo(mapInstance);
+              gpxLayers[name] = g;
+            }).catch(()=>{/* ignore */});
+          });
+        });
+
+        // map click selection: allow selecting nearest stop within small radius
+        mapInstance.on('dblclick', toggleMapFullscreen);
+      }
+
+      // small map for simulator
+      let simMap = null;
+      function initSimulatorMap() {
+        simMap = L.map('sim-map', { center:[6.666,80.75], zoom:9, preferCanvas:true, attributionControl:false });
+        L.tileLayer('map/tiles/{z}/{x}/{y}.png', { minZoom:0, maxZoom:18, attribution:'' }).addTo(simMap);
+      }
+
+      // Fullscreen toggle behavior for the map (double tap)
+      let mapIsFullscreen = false;
+      const headerEl = document.getElementById("header");
+      const bottomNav = document.getElementById("bottom-nav");
+      function toggleMapFullscreen() {
+        mapIsFullscreen = !mapIsFullscreen;
+        if (mapIsFullscreen) {
+          headerEl.classList.add("fullscreen-hidden");
+          bottomNav.classList.add("fullscreen-hidden");
+          document.getElementById("map").classList.add("map-fullscreen");
+        } else {
+          headerEl.classList.remove("fullscreen-hidden");
+          bottomNav.classList.remove("fullscreen-hidden");
+          document.getElementById("map").classList.remove("map-fullscreen");
+        }
+        if (mapInstance) setTimeout(()=>mapInstance.invalidateSize(),300);
+      }
+
+      // Side menu open/close
+      const sideMenu = document.getElementById("side-menu");
+      document.getElementById("side-toggle").addEventListener("click", () => {
+        sideMenu.classList.toggle("open");
+      });
+
+      // Side menu buttons: simple placeholders
+      document.getElementById("btn-gps").addEventListener("click", () => {
+        if (!mapInstance) return;
+        mapInstance.locate({ setView:true, maxZoom:16 });
+      });
+      document.getElementById("btn-save").addEventListener("click", () => {
+        if (!mapInstance) return;
+        const center = mapInstance.getCenter();
+        saveLocation({ name: `Saved ${new Date().toLocaleString()}`, lat:center.lat, lon:center.lng });
+        renderSaved();
+      });
+
+      // ---------------------------
+      // Saved storage & UI
+      // ---------------------------
+      function saveLocation(loc) {
+        const list = JSON.parse(localStorage.getItem("saved-locations") || "[]");
+        list.push(loc);
+        localStorage.setItem("saved-locations", JSON.stringify(list));
+      }
+      function saveTrack(name, geojson) {
+        const list = JSON.parse(localStorage.getItem("saved-tracks") || "[]");
+        list.push({ name, geo: geojson });
+        localStorage.setItem("saved-tracks", JSON.stringify(list));
+      }
+      function renderSaved() {
+        const locs = JSON.parse(localStorage.getItem("saved-locations") || "[]");
+        const tracks = JSON.parse(localStorage.getItem("saved-tracks") || "[]");
+        const locEl = document.getElementById("saved-locations");
+        const trkEl = document.getElementById("saved-tracks");
+        locEl.innerHTML = ""; trkEl.innerHTML = "";
+        locs.forEach((l, i) => {
+          const d = document.createElement("div"); d.className="saved-item";
+          d.innerHTML = `<div><input type="radio" name="loc" data-idx="${i}"> <strong>${l.name}</strong><div class="small muted">${l.lat.toFixed(4)}, ${l.lon.toFixed(4)}</div></div>
+                         <div><button class="btn ghost" data-idx="${i}" data-type="goto">Show</button></div>`;
+          locEl.appendChild(d);
+        });
+        trkEl.innerHTML = "";
+        tracks.forEach((t,i) => {
+          const d = document.createElement("div"); d.className="saved-item";
+          d.innerHTML = `<div><input type="radio" name="trk" data-idx="${i}"> <strong>${t.name}</strong></div>
+                         <div><button class="btn ghost" data-idx="${i}" data-type="trk">Show</button></div>`;
+          trkEl.appendChild(d);
+        });
+
+        // attach handlers
+        locEl.querySelectorAll("button").forEach(b => b.addEventListener("click", (ev) => {
+          const idx = b.dataset.idx; const list = JSON.parse(localStorage.getItem("saved-locations") || "[]");
+          const target = list[idx];
+          if (mapInstance && target) {
+            mapInstance.setView([target.lat, target.lon], 15);
+            // switch to map section
+            document.querySelector('[data-section="map"]').click();
+          }
+        }));
+        trkEl.querySelectorAll("button").forEach(b => b.addEventListener("click", (ev) => {
+          const idx = b.dataset.idx; const list = JSON.parse(localStorage.getItem("saved-tracks") || "[]");
+          const t = list[idx];
+          if (mapInstance && t) {
+            L.geoJSON(t.geo).addTo(mapInstance);
+            document.querySelector('[data-section="map"]').click();
+          }
+        }));
+      }
+
+      // import/export (very simple)
+      document.getElementById("import-btn").addEventListener("click", () => {
+        const json = prompt("Paste exported JSON of saved locations & tracks:");
+        try {
+          const data = JSON.parse(json);
+          if (data.locations) localStorage.setItem("saved-locations", JSON.stringify(data.locations));
+          if (data.tracks) localStorage.setItem("saved-tracks", JSON.stringify(data.tracks));
+          renderSaved();
+          alert("Imported");
+        } catch(e){ alert("Invalid JSON"); }
+      });
+      document.getElementById("export-btn").addEventListener("click", () => {
+        const locations = JSON.parse(localStorage.getItem("saved-locations") || "[]");
+        const tracks = JSON.parse(localStorage.getItem("saved-tracks") || "[]");
+        const out = { locations, tracks };
+        const txt = JSON.stringify(out, null, 2);
+        // Provide text for copy
+        prompt("Copy the exported JSON", txt);
+      });
+
+      // Map "Use" button to copy map-from/to to input form
+      document.getElementById("map-set-btn").addEventListener("click", () => {
+        const mf = document.getElementById("map-from").value;
+        const mt = document.getElementById("map-to").value;
+        fromSelect.value = mf; toSelect.value = mt;
+        // update selects and calculate
+        fromSelect.dispatchEvent(new Event('change'));
+        toSelect.dispatchEvent(new Event('change'));
+        // switch to buses
+        document.querySelector('[data-section="buses"]').click();
+      });
+
+      // ---------------------------
+      // Simple GPX simulator: animate one marker per GPX track at speed proportional to route times.
+      // Note: This is a simple demo. For production you'd want to map GPX coordinates to schedule times.
+      // ---------------------------
+      let simulatorMarkers = [];
+      function startSimulator() {
+        // clear existing markers
+        simulatorMarkers.forEach(m => { if (m.marker) simMap.removeLayer(m.marker); if (m.poly) simMap.removeLayer(m.poly); });
+        simulatorMarkers = [];
+        // for each GPX layer we create an animated marker
+        const gpxFiles = Object.keys(gpxLayers);
+        gpxFiles.forEach((name, idx) => {
+          try {
+            const geojson = gpxLayers[name].toGeoJSON ? gpxLayers[name].toGeoJSON() : gpxLayers[name].toGeoJSON;
+            // leafleft geojson -> find first LineString coordinates
+            let coords = null;
+            gpxLayers[name].eachLayer(layer => {
+              if (layer instanceof L.Polyline && !coords) coords = layer.getLatLngs();
+            });
+            if (!coords || coords.length < 2) return;
+            const poly = L.polyline(coords, { color:'#2b7cff', weight:3 }).addTo(simMap);
+            const marker = L.circleMarker(coords[0], { radius:6, color:'#ff6b6b', fillColor:'#ff6b6b', fillOpacity:1 }).addTo(simMap);
+            const speed = 30; // km/h synthetic
+            // we'll move the marker along the polyline
+            let i = 0;
+            function step() {
+              i++;
+              if (i >= coords.length) i = 0; // loop
+              marker.setLatLng(coords[i]);
+            }
+            const tid = setInterval(step, 1200 + idx*200);
+            simulatorMarkers.push({ marker, poly, tid });
+          } catch(e){ console.warn("sim error", e); }
+        });
+      }
+
+      // stop simulator
+      function stopSimulator() {
+        simulatorMarkers.forEach(m => { clearInterval(m.tid); if (m.marker) simMap.removeLayer(m.marker); if (m.poly) simMap.removeLayer(m.poly); });
+        simulatorMarkers = [];
+      }
+
+      // ---------------------------
+      // Theme & language & small features
+      // ---------------------------
+      document.getElementById("theme-toggle").addEventListener("click", () => {
+        currentTheme = (currentTheme === "light") ? "dark" : "light";
+        document.getElementById("app").setAttribute("data-theme", currentTheme);
+      });
+
+      // notification permission
+      if ("Notification" in window) {
+        if (Notification.permission === "default") Notification.requestPermission().then(()=>{/*ignore*/});
+      }
+
+      // GPS toggle placeholder
+      document.getElementById("gps-toggle").addEventListener("click", () => {
+        if (mapInstance) {
+          mapInstance.locate({ setView:true, maxZoom:16 });
+        } else {
+          alert("Map not initialised");
+        }
+      });
+
+      // layer toggles - wire them (simple show/hide by replacing base layer)
+      document.querySelectorAll(".layer-toggle").forEach(chk => {
+        chk.addEventListener("change", () => {
+          const id = chk.dataset.layer;
+          if (!mapInstance) return;
+          if (id === "osm") {
+            if (chk.checked) mapLayers.osm.addTo(mapInstance);
+            else mapInstance.removeLayer(mapLayers.osm);
+          } else if (id === "sat") {
+            if (chk.checked) mapLayers.sat.addTo(mapInstance);
+            else mapInstance.removeLayer(mapLayers.sat);
+          } // topo/hill not implemented in this demo
+        });
+      });
+
+      // ---------------------------
+      // Initialise UI & map
+      // ---------------------------
+      (function init() {
+        populateRoutes();
+        populateStopsForRoute(selectedRouteId);
+
+        // set time input to now by default
+        const now = new Date();
+        timeInput.value = now.toTimeString().slice(0,5);
+
+        // init maps
+        initMap();
+        initSimulatorMap();
+
+        // start simulator after small delay
+        setTimeout(()=>startSimulator(), 800);
+
+        // render saved
+        renderSaved();
+
+        // calculate default
+        calculateAndDisplay();
+      })();
+
+      // make sure simulator map resizes on tab show
+      document.querySelector('[data-section="map"]').addEventListener("click", () => { if (simMap) simMap.invalidateSize(); if (mapInstance) mapInstance.invalidateSize(); });
+
+      // clean up before unload
+      window.addEventListener("beforeunload", () => { stopSimulator(); });
+
+      // expose some functions for debugging in console
+      window.app = {
+        busTimeTables, findPrevNext, parseTimeHHMM, formatMinutesToHHMM,
+        startSimulator, stopSimulator, toggleMapFullscreen
+      };
+ if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => console.log('Service Worker Registered',reg))
+      .catch(err => console.log('Registration Failed', err));
+  });
+}
+    </script>
+  </div>
+
+</body></html>
